@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
 
+import 'package:mic_analyzer/plotterWidget.dart';
 import 'package:mic_stream/mic_stream.dart';
 import 'package:charts_flutter/flutter.dart';
 
@@ -51,81 +51,28 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin{
-  StreamSubscription<List<int>> listener;
-  List<Series<SamplePoint, double>> dataSets;
-  int xAxisSize = 40000;//points
-  Queue<SamplePoint> dataQueue = new Queue();
-  int dataPointSinceLastUpdate = 0;   //How many data points have been loaded since last refresh.
-  int dataPointsBeforeRefresh = 1000; //How many data points should be loaded before refreshing the map.
+  Stream<List<int>> micStream;
+  StreamController<List<int>> broadcastStreamController;
+  StreamSubscription<List<int>> micStreamListener;
   bool isPaused = false;
   AnimationController _pauseBtnController;
 
   @override
   void initState() {
+    // Init a new Stream
+    micStream = microphone(sampleRate: 44100);
+    broadcastStreamController = StreamController<List<int>>.broadcast();
 
+    micStreamListener = micStream.listen((samples) {
+      broadcastStreamController.add(samples);
+    });
     _pauseBtnController = AnimationController(vsync: this, duration: Duration(milliseconds: 300));
 
-
-    dataQueue.add(SamplePoint(0, 0)); //Initial Point
-    dataSets = [
-      new Series<SamplePoint, double>(
-        id: 'terrain',
-        colorFn: (_, __) => MaterialPalette.blue.shadeDefault,
-        domainFn: (SamplePoint point, _) => point.distance,
-        measureFn: (SamplePoint point, _) => point.amplitude,
-        data: dataQueue.toList(),
-      )
-    ];
-
-    _startListener();
 
     super.initState();
   }
 
-  void _startListener(){
-    // Init a new Stream
-    Stream<List<int>> stream = microphone(sampleRate: 44100);
 
-    // Start listening to the stream
-    listener = stream.listen((samples) {
-      //Update graph
-      setState(() {
-        //Iterate through samples and add to queue.
-        for(int i=0; i<samples.length; i++){
-          double amplitude = samples[i].toDouble();
-          amplitude = (amplitude/255) - .5;
-          double distance = dataQueue.elementAt(dataQueue.length-1).distance+1;
-          dataQueue.add(new SamplePoint(distance, amplitude));
-          if(dataQueue.length > xAxisSize){
-            //remove first from queue to keep at defined size
-            dataQueue.removeFirst();
-          }
-          //keep track of how long since the last graph update
-          dataPointSinceLastUpdate+=1;
-        }
-
-
-        //if it has been long enough since last graph update, update the graph
-        if(dataPointSinceLastUpdate >= dataPointsBeforeRefresh){
-          dataPointSinceLastUpdate = 0;
-          dataSets = [
-            Series<SamplePoint, double>(
-              id: 'waveform',
-              colorFn: (_, __) => MaterialPalette.blue.shadeDefault,
-              domainFn: (SamplePoint point, _) => point.distance,
-              measureFn: (SamplePoint point, _) => point.amplitude,
-              data: dataQueue.toList(),
-            ),
-          ];
-        }
-      });
-    });
-  }
-
-  void _stopListener(){
-    //Pause the subscription
-    listener.cancel();
-  }
 
 
 
@@ -135,55 +82,30 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin{
 
   @override
   void dispose() {
-    // Cancel the subscription
-    listener.cancel();
     _pauseBtnController.dispose();
-
-    // TODO: implement dispose
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: Stack(
         children: <Widget>[
           Align(
             alignment: Alignment.topCenter,
-            child: Container(
-              height: 200,
-              child: LineChart(
-                dataSets,
-                animate: false,
-                primaryMeasureAxis: new NumericAxisSpec(
-                  tickProviderSpec: new StaticNumericTickProviderSpec(
-                      <TickSpec<num>>[
-                        TickSpec(-.4),
-                        TickSpec(-.2),
-                        TickSpec(0),
-                        TickSpec(.2),
-                        TickSpec(.4),
-                      ]
+            child: Column(
+              children: <Widget>[
+                Container(
+                  height: 200,
+                  child: PlotterWidget(
+                    sampleStream: broadcastStreamController.stream,
+                    sampleRate: 44100,
                   ),
-                  showAxisLine: true,
-
                 ),
-                domainAxis: new NumericAxisSpec(
-                  renderSpec: NoneRenderSpec(),
-                  tickProviderSpec: new NumericEndPointsTickProviderSpec(),
-                ),
-              ),
+              ],
             ),
           ),
         ],
@@ -193,10 +115,8 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin{
           isPaused = !isPaused;
           if(isPaused){
             _pauseBtnController.forward();
-            _stopListener();
           } else {
             _pauseBtnController.reverse();
-            _startListener();
           }
         },
         child: AnimatedIcon(
@@ -205,20 +125,5 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin{
         ),
       ), // This trailing comma makes auto-formatting nicer for build methods.
     );
-  }
-}
-
-
-class SamplePoint {
-  final double distance;
-  final double amplitude;
-
-  SamplePoint(this.distance, this.amplitude);
-
-
-  @override
-  String toString() {
-    // TODO: implement toString
-    return "(" + distance.toString() + ", " + amplitude.toString() +  ")";
   }
 }
