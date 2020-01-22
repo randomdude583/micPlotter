@@ -3,7 +3,6 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:charts_flutter/flutter.dart';
-import 'package:mic_analyzer/barChartPainter.dart';
 
 class PlotterWidget extends StatefulWidget {
 
@@ -19,32 +18,31 @@ class PlotterWidget extends StatefulWidget {
   //Distance between ticks on the Y axis.
   final double yAxisResolution;
 
-  //Size of X axis (time). How many seconds of data should be saved.
-  final double xAxisMemorySize;
-
-  //How many seconds should be displayed
-  final double xAxisVisibleSize;
+  //Size of X axis (time). How many seconds of data should be displayed.
+  final double xAxisSize;
 
   //Number of data points to be displayed on screen at once.
   final int resolution;
 
+  //Graph refresh rate (Hz)
+  final int refreshRate;
 
 
   //Constructor
   PlotterWidget({
     @required this.sampleStream,
     @required this.sampleRate,
-    this.yAxisMax: .5,          //not yet implemented  TODO
-    this.yAxisResolution: .25,  //not yet implemented  TODO
-    this.xAxisMemorySize: 5,
-    this.xAxisVisibleSize: 1,
-    this.resolution: 50,
+    this.yAxisMax: .5,
+    this.yAxisResolution: .25,
+    this.xAxisSize: 1,
+    this.resolution: 500,
+    this.refreshRate: 30,
   });
 
 
   @override
   State<StatefulWidget> createState() {
-    return _PlotterWidgetState(sampleStream, sampleRate, yAxisMax, yAxisResolution, xAxisMemorySize, xAxisVisibleSize, resolution);
+    return _PlotterWidgetState(sampleStream, sampleRate, yAxisMax, yAxisResolution, xAxisSize, resolution, refreshRate);
   }
 
 }
@@ -59,9 +57,9 @@ class _PlotterWidgetState extends State {
   final int sampleRate;
   final double yAxisMax;
   final double yAxisResolution;
-  final double xAxisMemorySize;
-  final double xAxisVisibleSize;
+  final double xAxisSize;
   final int resolution;
+  final int refreshRate;
 
   //Constructor
   _PlotterWidgetState(
@@ -69,20 +67,18 @@ class _PlotterWidgetState extends State {
     this.sampleRate,
     this.yAxisMax,
     this.yAxisResolution,
-    this.xAxisMemorySize,
-    this.xAxisVisibleSize,
+    this.xAxisSize,
     this.resolution,
+    this.refreshRate,
   );
 
 
   //Variables
   StreamSubscription<List<int>> listener;
-  double oldxAxisVisibleSize;
-  int memoryQueueSize;
-  Queue<int> memoryQueue = new Queue();
-  Queue<double> graphPointsQueue = new Queue();
-  int dataPointsPerBar;
-  int dataPointsSinceLastUpdate;
+  int queueSize;
+  Queue<int> dataQueue = new Queue();
+  List<Series<SamplePoint, double>> dataSets;
+  List<TickSpec<num>> yAxisTicks = new List<TickSpec<num>>();
 
 
 
@@ -90,25 +86,33 @@ class _PlotterWidgetState extends State {
 
   @override
   void initState() {
-    testArgs();
-    oldxAxisVisibleSize = xAxisVisibleSize;
-    memoryQueueSize = (sampleRate * xAxisMemorySize).toInt();
-    memoryQueueSize -= memoryQueueSize % resolution;
-
-    dataPointsPerBar = ((sampleRate * xAxisVisibleSize) / resolution).floor();
-    dataPointsSinceLastUpdate = 0;
-
-
-   //initialize graph points
-    if(graphPointsQueue.length == 0){
-      for(int i=0; i < resolution; i++){
-        graphPointsQueue.add(0);
-      }
+    queueSize = (sampleRate * xAxisSize).toInt();
+    yAxisTicks.add(TickSpec(0));
+    for(double i=0+yAxisResolution; i<=yAxisMax; i = num.parse((i+yAxisResolution).toStringAsFixed(5))){
+      yAxisTicks.add(TickSpec(i));
+      yAxisTicks.add(TickSpec(0-i));
     }
 
 
 
+    int dataPointsBeforeRefresh = (sampleRate / refreshRate).toInt();
+    int dataPointSinceLastUpdate = 0;
 
+
+    dataQueue.add(0); //Initial Point
+    List<SamplePoint> displayPoints = new List<SamplePoint>();
+    displayPoints.add(SamplePoint(0, 0));
+
+
+    dataSets = [
+      new Series<SamplePoint, double>(
+        id: 'terrain',
+        colorFn: (_, __) => MaterialPalette.blue.shadeDefault,
+        domainFn: (SamplePoint point, _) => point.distance,
+        measureFn: (SamplePoint point, _) => point.amplitude,
+        data: displayPoints,
+      )
+    ];
 
 
 
@@ -116,38 +120,46 @@ class _PlotterWidgetState extends State {
     listener = sampleStream.asBroadcastStream().listen((samples) {
       setState(() {
 
+
         //Update queue
         //Iterate through samples and add to queue.
         for(int i=0; i<samples.length; i++){
-          memoryQueue.add(samples[i]);
-
-          if(memoryQueue.length > memoryQueueSize){
+          dataQueue.add(samples[i]);
+          if(dataQueue.length > queueSize){
             //remove first from queue to keep at defined size
-            memoryQueue.removeFirst();
+            dataQueue.removeFirst();
           }
-          dataPointsSinceLastUpdate += 1;
+          //keep track of how long since the last graph update
+          dataPointSinceLastUpdate+=1;
+        }
 
-          if(dataPointsSinceLastUpdate >= dataPointsPerBar){
-            dataPointsSinceLastUpdate = 0;
 
-            //add new bar to graphPointsQueue
-            int offset = memoryQueue.length-dataPointsPerBar;
 
-            double curMax = 0;
-            int counter = 0;
-            for(i=offset; i<memoryQueue.length; i++){
-              counter ++;
-              double value = (memoryQueue.elementAt(i)/255) - .5 ;
-              if(value > curMax){
-                curMax = value;
-              }
-            }
 
-            graphPointsQueue.add(curMax);
-            if(graphPointsQueue.length > resolution){
-              graphPointsQueue.removeFirst();
-            }
+
+
+
+        //if it has been long enough since last graph update, update the graph
+        if(dataPointSinceLastUpdate >= dataPointsBeforeRefresh){
+          dataPointSinceLastUpdate = 0;
+
+          List<SamplePoint> displayPoints = new List<SamplePoint>();
+          for(int i=0; i<=dataQueue.length-1; i+=10){
+            displayPoints.add(
+                SamplePoint(i.toDouble(), (dataQueue.elementAt(i)/255) - .5)
+            );
           }
+
+
+          dataSets = [
+            Series<SamplePoint, double>(
+              id: 'waveform',
+              colorFn: (_, __) => MaterialPalette.blue.shadeDefault,
+              domainFn: (SamplePoint point, _) => point.distance,
+              measureFn: (SamplePoint point, _) => point.amplitude,
+              data: displayPoints,
+            ),
+          ];
         }
       });
     });
@@ -156,50 +168,38 @@ class _PlotterWidgetState extends State {
   }
 
 
-
-
-
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      child: Container(
-        height: 300.0,
+    return LineChart(
+      dataSets,
+      animate: false,
+      primaryMeasureAxis: new NumericAxisSpec(
+        tickProviderSpec: new StaticNumericTickProviderSpec(yAxisTicks),
+        showAxisLine: true,
       ),
-      painter: BarChartPainter(
-        graphPoints: graphPointsQueue.toList(),
-        gapPercentage: 5/10,
-        color: Colors.orange,
+      domainAxis: new NumericAxisSpec(
+        renderSpec: NoneRenderSpec(),
+        tickProviderSpec: new NumericEndPointsTickProviderSpec(),
       ),
     );
-  }
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-  void testArgs(){
-    if(xAxisVisibleSize > xAxisMemorySize){
-      throw Exception("xAxisVisibleSize must be smaller than xAxisMemorySize");
-    }
-    if(xAxisMemorySize < 0){
-      throw Exception("xAxisMemorySize must be greater than 0");
-    }
-    if(xAxisVisibleSize < 0){
-      throw Exception("xAxisVisibleSize must be greater than 0");
-    }
-    if(resolution < 0){
-      throw Exception("resolution must be greater than 0");
-    }
 
   }
+}
+
+
+
+
+
+
+
+
+class SamplePoint {
+  final double distance;
+  final double amplitude;
+
+  SamplePoint(this.distance, this.amplitude);
 }
