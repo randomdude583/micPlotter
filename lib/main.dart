@@ -64,7 +64,9 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin{
     broadcastStreamController = StreamController<List<int>>.broadcast();
 
     micStreamListener = micStream.listen((samples) {
-      broadcastStreamController.add(samples);
+      if(!isPaused) {
+        broadcastStreamController.add(samples);
+      }
     });
     _pauseBtnController = AnimationController(vsync: this, duration: Duration(milliseconds: 300));
 
